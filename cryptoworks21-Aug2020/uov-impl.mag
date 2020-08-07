@@ -1,0 +1,148 @@
+//UOV implementation in MAGMA
+
+
+// Returns a sequence of l chosen random elements in K
+function RandVec(K, l)
+   return Vector(K, l, [Random(K) : t in [1..l]]);
+end function;
+
+
+
+
+// Returns a e1 x e2 matrix with random elements in K
+function RandMatrix(K, e1, e2)
+   return Matrix(K, e1, e2, [Random(K) : i in [1..e1*e2]]);
+end function;
+
+
+
+
+// UOV KeyGen
+function KeyGen(K, v, o)
+   m := o;
+   n := v + o;
+  
+  // F : Convenient representation consisting of m matrices nxn
+  // coefficients of Fkij for i>v j>v are all zeros so that there are no quadratic terms neither crossed in oil variables
+  F := [ZeroMatrix(K, n, n) : s in [1..m]];
+  for k in [1..m] do
+    F[k] := RandMatrix(K, n, n);
+    InsertBlock(~F[k],ZeroMatrix(K,m,m),v+1,v+1);
+  end for;
+    
+   // linear transform:
+   // S: invertible matrix of size n x n
+   Satt := 0;
+   repeat
+       "S attempt", Satt; Satt +:= 1;
+       S := RandMatrix(K, n, n);
+     isInv, Sinv := IsInvertible(S);
+   until isInv;
+   "S ok";
+   //"S:", S;
+
+   // public:
+   // P: collection of m matrices n x n;
+  P := [];  
+   // Composition of the central map F with the linear transform S
+   // P <- FoL or in matrix notation P_k := S^T * F_k * S
+   for i in [1..m] do
+    P[i] := S*F[i]*Transpose(S);
+   end for; 
+   "P ok";
+  
+   return F, S, Sinv, P;
+end function;
+
+
+
+
+// Find x such that P(x) = FoS(x) = h
+// First compute u = F^-1(h)
+// Then recover x = uS^-1
+function UOVSign(K, v, o, F, Sinv, h)
+    m := o;
+    n := v + o;
+    cnt := 0;
+
+
+    // Solve the quadratic system u*F*u^T = h from UOV trapdoor
+    //=========================================================
+    //F^(i) = |  A^(i)_{vxv} | B^(i)_{vxm}|
+    //        |  C^(i)_{mxv} |   0_{mxm}  |
+    //=========================================================
+    A := [Submatrix(F[i], 1, 1, v, v) : i in [1..m]];
+    B := [Submatrix(F[i], 1, v+1, v, m) : i in [1..m]];
+    C := [Submatrix(F[i], v+1, 1, m, v) : i in [1..m]];
+   
+    // Solve the linear system oils*M = b
+  repeat
+    cnt +:= 1;    
+    // Get random values for the vinegars
+    vinegars := Vector(K, v, [Random(K) : i in [1..v]]);
+    vinegarsT := Matrix(K,v,1,Eltseq(vinegars));
+    
+    M := VerticalJoin([Transpose(C[k]*vinegarsT) + Transpose(vinegarsT)*B[k]: k in [1..m]]);
+    
+    isInv, Minv := IsInvertible(M);
+  until isInv;
+  
+  b := Vector(K, m, [h[k] - (vinegars*A[k]*vinegarsT)[1] : k in [1..m]]);
+  
+  oils := b*Transpose(Minv);
+  //"o:", oils;
+  
+  u := Vector(K, n, Eltseq(vinegars) cat Eltseq(oils));
+  x := u*Sinv;
+  
+   return x;
+end function;
+
+
+
+
+// P(u) can be viewed as u^T*P_k*u = h_k
+function UOVVerify(K, P, s, h)
+    for i in [1..Ncols(h)] do
+        if &+Eltseq(s*P[i]*s) ne h[i] then
+            return false;
+        end if;
+    end for;
+    return true;
+end function;
+
+
+
+
+////////////////////////////////////////
+//Setting the parameters
+////////////////////////////////////////
+// K : the underlying UOV field
+K := GF(256);
+
+// toy examples
+//m := 10; n := 30;
+//m := 6; n := 15;
+m := 3; n := 9;
+
+o := m;
+v := n-o;
+F, S, Sinv, P := KeyGen(K, v, o);
+
+
+
+////////////////////////////////////////
+//Generating a signature
+////////////////////////////////////////
+
+// h : hash of some message F_q* -> (F_q)^m
+h := RandVec(K, m);
+s := UOVSign(K, v, o, F, Sinv, h);
+
+
+
+////////////////////////////////////////
+//Verifying a signature
+////////////////////////////////////////
+"UOV Verify:", UOVVerify(K, P, s, h);
+
